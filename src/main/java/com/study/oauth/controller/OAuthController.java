@@ -13,6 +13,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Base64;
 
@@ -34,6 +37,9 @@ public class OAuthController {
 
     // 세션에 state 를 저장할 때 쓸 key 이름. (provider별로 구분해서 저장한다)
     private static final String SESSION_STATE_KEY_PREFIX = "oauth_state_";
+
+    // [PKCE] 세션에 code_verifier(열쇠 원본)를 저장할 때 쓸 key 이름.
+    private static final String SESSION_VERIFIER_KEY_PREFIX = "oauth_verifier_";
 
     // 예측 불가능한 랜덤값을 만드는 보안용 난수 생성기.
     // 일반 Random 이 아니라 SecureRandom 을 쓰는 이유: state 는 "추측 불가능"해야 의미가 있기 때문.
@@ -73,6 +79,14 @@ public class OAuthController {
         //    실제 값은 서버가 들고 있고, 브라우저에는 이 세션을 여는 번호표(JSESSIONID 쿠키)만 나간다.
         session.setAttribute(SESSION_STATE_KEY_PREFIX + provider, state);
 
+        // ①-2 [PKCE] 열쇠(code_verifier) 생성 → 세션에 보관, 자물쇠(code_challenge)만 URL로 보낸다.
+        //     - verifier(열쇠)  : 절대 네트워크로 안 나감. 세션에만 둔다. 토큰 교환 때만 꺼내 쓴다.
+        //     - challenge(자물쇠): verifier 를 SHA-256 해시한 값. 이것만 로그인 URL에 실어 보낸다.
+        //     해시는 단방향이라, 중간에서 challenge 를 훔쳐봐도 verifier 를 되돌릴 수 없다.
+        String codeVerifier = generateCodeVerifier();
+        String codeChallenge = createCodeChallenge(codeVerifier);
+        session.setAttribute(SESSION_VERIFIER_KEY_PREFIX + provider, codeVerifier);
+
         // ③ 제공자 로그인 URL 조립. (?response_type=code&client_id=...&redirect_uri=...&scope=...&state=...)
         String authorizationUrl = UriComponentsBuilder
                 .fromUriString(config.getAuthorizationUri())
@@ -81,6 +95,8 @@ public class OAuthController {
                 .queryParam("redirect_uri", config.getRedirectUri()) // 끝나면 우리 콜백으로 돌려보내
                 .queryParam("scope", config.getScope())         // 요청 권한 범위
                 .queryParam("state", state)                     // ★ 방금 만든 state 를 URL에 실어 보냄
+                .queryParam("code_challenge", codeChallenge)    // ★ [PKCE] 자물쇠만 보냄 (열쇠는 세션에 숨김)
+                .queryParam("code_challenge_method", "S256")    // ★ [PKCE] "SHA-256으로 해시했음" 을 알림
                 .build()
                 .toUriString();
 
@@ -112,8 +128,12 @@ public class OAuthController {
         // 세션에 저장해둔 state(진짜 값)를 번호표(세션 쿠키)로 찾아 꺼낸다.
         String savedState = (String) session.getAttribute(SESSION_STATE_KEY_PREFIX + provider);
 
-        // 한 번 쓴 state 는 재사용 못 하게 즉시 제거(재생 공격 방지).
+        // [PKCE] 로그인 시작 때 세션에 넣어둔 열쇠(code_verifier)를 꺼낸다.
+        String codeVerifier = (String) session.getAttribute(SESSION_VERIFIER_KEY_PREFIX + provider);
+
+        // 한 번 쓴 state / verifier 는 재사용 못 하게 즉시 제거(재생 공격 방지).
         session.removeAttribute(SESSION_STATE_KEY_PREFIX + provider);
+        session.removeAttribute(SESSION_VERIFIER_KEY_PREFIX + provider);
 
         // "URL로 온 state" == "세션에 저장해둔 state" 여야만 통과.
         //  - 쿠키를 지웠거나 다른 브라우저면 savedState 가 null → 불일치 → 거절
@@ -129,7 +149,9 @@ public class OAuthController {
         // 여기 도달 = state 검증 통과. 이제 안심하고 뒷길 통신을 진행한다.
 
         // ── (6) code → access_token 교환 (뒷길: 서버 ↔ 제공자, 브라우저 안 거침) ──
-        String accessToken = oAuthClient.exchangeCodeForToken(config, code);
+        //    [PKCE] 여기서 열쇠(code_verifier)를 함께 보낸다. 제공자가 SHA256(verifier)를
+        //    로그인 때 받아둔 challenge 와 대조해, 맞아야만 토큰을 내준다.
+        String accessToken = oAuthClient.exchangeCodeForToken(config, code, codeVerifier);
 
         // ── (7) access_token(카드키)으로 사용자 정보 조회 ──
         OAuthUser user = oAuthClient.fetchUserInfo(provider, config, accessToken);
@@ -149,5 +171,32 @@ public class OAuthController {
         byte[] bytes = new byte[32];
         secureRandom.nextBytes(bytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    /**
+     * [PKCE] 열쇠(code_verifier) 생성.
+     * 32바이트 난수 → URL 안전 Base64(43자). 매 로그인마다 새로 만드는 "일회용 비밀번호".
+     */
+    private String generateCodeVerifier() {
+        byte[] bytes = new byte[32];
+        secureRandom.nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    /**
+     * [PKCE] 자물쇠(code_challenge) 생성 = BASE64URL( SHA-256( code_verifier ) ).
+     *
+     * <p>열쇠를 SHA-256으로 해시한 값. 해시는 단방향이라 이 값(자물쇠)에서 원래 열쇠를 되돌릴 수 없다.
+     *    그래서 이 값은 로그인 URL에 노출돼도 안전하다. (진짜 방패는 세션에만 있는 열쇠)
+     */
+    private String createCodeChallenge(String codeVerifier) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(codeVerifier.getBytes(StandardCharsets.US_ASCII));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(hash);
+        } catch (NoSuchAlgorithmException e) {
+            // SHA-256 은 모든 자바 표준에 있어 실제로는 발생하지 않는다.
+            throw new IllegalStateException("SHA-256 미지원", e);
+        }
     }
 }

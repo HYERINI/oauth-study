@@ -32,8 +32,14 @@ public class OAuthClient {
      * <p>왜 굳이 교환하나? code 는 콜백에서 브라우저 URL에 노출됐던 값이라 그 자체론 위험하다.
      *    그래서 code 하나만으론 아무것도 못 하게 만들고, 여기서 client_secret(서버만 아는 비밀)을
      *    함께 제시해야만 진짜 토큰을 내주도록 설계돼 있다. = "앞길엔 code만, 뒷길에서 토큰 교환".
+     *
+     * <p>[PKCE] 여기에 code_verifier(열쇠 원본)를 함께 보낸다.
+     *    제공자는 SHA256(code_verifier) 가 로그인 시작 때 받아둔 code_challenge(자물쇠)와 같은지 확인한다.
+     *    code 를 훔쳐도 이 열쇠가 없으면 토큰 교환이 거부된다. (client_secret 없는 앱을 위한 방패)
+     *
+     * @param codeVerifier 로그인 시작 때 만들어 세션에 보관해둔 PKCE 열쇠 원본
      */
-    public String exchangeCodeForToken(OAuthProperties.Provider provider, String code) {
+    public String exchangeCodeForToken(OAuthProperties.Provider provider, String code, String codeVerifier) {
         // application/x-www-form-urlencoded 형식의 폼 바디를 만든다. (OAuth 토큰 엔드포인트 표준 형식)
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("grant_type", "authorization_code");      // "인가 코드 방식으로 토큰 달라"
@@ -41,6 +47,7 @@ public class OAuthClient {
         form.add("client_id", provider.getClientId());
         form.add("client_secret", provider.getClientSecret()); // ★ 서버만 아는 비밀 (뒷길이라 붙여도 안전)
         form.add("redirect_uri", provider.getRedirectUri());   // 처음 요청 때와 동일해야 함(제공자가 대조)
+        form.add("code_verifier", codeVerifier);               // ★ [PKCE] 열쇠 원본 제시 (자물쇠와 대조됨)
 
         // 제공자 서버로 POST. 응답 JSON을 Map으로 받는다.
         // Accept: application/json  →  특히 깃허브는 이 헤더가 없으면 JSON이 아니라
