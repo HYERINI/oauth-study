@@ -1,0 +1,49 @@
+server:
+  port: 8080
+
+# ─────────────────────────────────────────────────────────────
+#  OAuth 제공자(Provider)별 설정
+# ─────────────────────────────────────────────────────────────
+#  우리가 대화에서 정리한 등장인물로 매핑하면:
+#   - client-id / client-secret : 인화앱(Client)이 구글/카카오/깃허브에 미리 등록해두고 받는 신분증.
+#                                 특히 client-secret 은 "서버만 아는 비밀"이라 뒷길(토큰 교환)에서만 쓴다.
+#   - authorization-uri         : 사용자를 보내는 곳 = 로그인/동의를 받는 Authorization Server (프런트 데스크)
+#   - token-uri                 : code 를 access_token 으로 바꾸는 곳 (뒷길, 서버↔서버)
+#   - user-info-uri             : access_token(카드키)으로 실제 데이터를 얻는 Resource Server (검문소)
+#   - redirect-uri              : 로그인 끝나면 사용자를 되돌려보낼 우리 콜백 주소
+#   - scope                     : 허용받을 권한의 범위
+#
+#  ⚠️ client-id / client-secret 은 각 개발자 콘솔에서 앱을 등록하고 발급받아야 한다. (README 참고)
+#     소스에 직접 적지 말고 환경변수로 주입한다.  ${GOOGLE_CLIENT_ID:} 의 ':' 뒤가 비어있으면
+#     "환경변수 없으면 빈 값" 이라는 뜻이라, 자격증명 없이도 앱은 일단 뜬다(해당 provider만 로그인 실패).
+# ─────────────────────────────────────────────────────────────
+oauth:
+  providers:
+    google:
+      client-id: ${GOOGLE_CLIENT_ID:}
+      client-secret: ${GOOGLE_CLIENT_SECRET:}
+      authorization-uri: https://accounts.google.com/o/oauth2/v2/auth
+      token-uri: https://oauth2.googleapis.com/token
+      user-info-uri: https://www.googleapis.com/oauth2/v2/userinfo
+      redirect-uri: http://localhost:8080/oauth/google/callback
+      scope: openid email profile
+
+    kakao:
+      client-id: ${KAKAO_CLIENT_ID:}
+      # 카카오는 'client_secret'을 콘솔에서 켠 경우에만 필요. 안 켰으면 빈 값이어도 동작한다.
+      client-secret: ${KAKAO_CLIENT_SECRET:}
+      authorization-uri: https://kauth.kakao.com/oauth/authorize
+      token-uri: https://kauth.kakao.com/oauth/token
+      user-info-uri: https://kapi.kakao.com/v2/user/me
+      redirect-uri: http://localhost:8080/oauth/kakao/callback
+      # profile_nickname 만 요청(이메일은 카카오 콘솔에서 추가 심사·동의항목 설정이 필요해 기본 제외).
+      scope: profile_nickname
+
+    github:
+      client-id: ${GITHUB_CLIENT_ID:}
+      client-secret: ${GITHUB_CLIENT_SECRET:}
+      authorization-uri: https://github.com/login/oauth/authorize
+      token-uri: https://github.com/login/oauth/access_token
+      user-info-uri: https://api.github.com/user
+      redirect-uri: http://localhost:8080/oauth/github/callback
+      scope: read:user user:email
