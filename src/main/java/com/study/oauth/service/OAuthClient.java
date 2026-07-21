@@ -2,13 +2,17 @@ package com.study.oauth.service;
 
 import com.study.oauth.config.OAuthProperties;
 import com.study.oauth.dto.OAuthUser;
+import com.study.oauth.service.mapper.OAuthUserMapper;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
 
+import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * OAuth의 "뒷길(서버 ↔ 제공자 서버)" 통신을 담당하는 서비스.
@@ -19,12 +23,24 @@ import java.util.Map;
  *
  * <p>이 두 통신은 브라우저를 거치지 않고 우리 서버가 제공자 서버에 직접 요청한다.
  *    그래서 여기서 client_secret 같은 진짜 비밀을 붙여도 안전하다.
+ *
+ * <p>[SRP/OCP] 제공자별 응답 파싱은 이 클래스가 직접 하지 않고 {@link OAuthUserMapper} 구현체에 위임한다.
+ *    이 서비스는 "HTTP 통신"에만 집중하고, "응답 정규화"는 매퍼가 담당한다.
  */
 @Service
 public class OAuthClient {
 
     // 스프링이 제공하는 HTTP 클라이언트. 우리 서버가 남의 서버(구글 등)를 호출할 때 쓴다.
     private final RestClient restClient = RestClient.create();
+
+    // provider 이름 → 그 제공자 응답 매퍼. 스프링이 모든 OAuthUserMapper 구현체를 List로 주입해주면,
+    // 여기서 provider() 를 키로 하는 Map 으로 정리해둔다. (새 제공자 추가 시 이 코드는 안 바뀐다)
+    private final Map<String, OAuthUserMapper> userMappers;
+
+    public OAuthClient(List<OAuthUserMapper> mappers) {
+        this.userMappers = mappers.stream()
+                .collect(Collectors.toMap(OAuthUserMapper::provider, Function.identity()));
+    }
 
     /**
      * (6단계) 임시 code 를 access_token 으로 교환한다.
@@ -74,7 +90,8 @@ public class OAuthClient {
      * <p>토큰은 "Authorization: Bearer {토큰}" 헤더에 실어 제시한다.
      *    제공자는 이 토큰이 유효한지 + scope에 이 데이터 접근 권한이 있는지 확인 후 데이터를 준다.
      *
-     * <p>제공자마다 응답 JSON 모양이 달라서, provider 이름으로 갈라 파싱한 뒤 공통 OAuthUser로 정규화한다.
+     * <p>제공자마다 응답 JSON 모양이 다르지만, 파싱은 provider 별 {@link OAuthUserMapper} 에 위임한다.
+     *    이 메서드는 "토큰으로 응답을 받아오는 것"까지만 책임진다.
      */
     public OAuthUser fetchUserInfo(String providerName, OAuthProperties.Provider provider, String accessToken) {
         Map<String, Object> body = restClient.get()
@@ -88,57 +105,11 @@ public class OAuthClient {
             throw new IllegalStateException("사용자 정보 응답이 비어있음");
         }
 
-        // ── 제공자별 JSON 모양이 다르므로 각각 맞춰서 꺼낸다 ──
-        return switch (providerName) {
-            case "google" -> new OAuthUser(
-                    "google",
-                    String.valueOf(body.get("id")),
-                    String.valueOf(body.get("name")),
-                    (String) body.get("email")
-            );
-            case "github" -> new OAuthUser(
-                    "github",
-                    String.valueOf(body.get("id")),
-                    // 깃허브는 실명(name)이 비공개면 null → 로그인 아이디(login)로 대체
-                    body.get("name") != null ? String.valueOf(body.get("name")) : String.valueOf(body.get("login")),
-                    (String) body.get("email") // 이메일 비공개면 null (별도 /user/emails 호출 필요)
-            );
-            case "kakao" -> parseKakao(body);
-            default -> throw new IllegalArgumentException("알 수 없는 provider: " + providerName);
-        };
-    }
-
-    /**
-     * 카카오는 정보가 중첩 구조라 별도 파싱.
-     * 응답 예:
-     * {
-     *   "id": 123456789,
-     *   "properties": { "nickname": "홍길동" },
-     *   "kakao_account": { "email": "hong@kakao.com", "profile": { "nickname": "홍길동" } }
-     * }
-     */
-    @SuppressWarnings("unchecked")
-    private OAuthUser parseKakao(Map<String, Object> body) {
-        String id = String.valueOf(body.get("id"));
-
-        String nickname = null;
-        String email = null;
-
-        Map<String, Object> properties = (Map<String, Object>) body.get("properties");
-        if (properties != null) {
-            nickname = (String) properties.get("nickname");
+        // provider 에 맞는 매퍼를 찾아 위임한다. (switch 제거 → 새 제공자는 매퍼 클래스만 추가하면 됨)
+        OAuthUserMapper mapper = userMappers.get(providerName);
+        if (mapper == null) {
+            throw new IllegalArgumentException("등록된 매퍼가 없는 provider: " + providerName);
         }
-
-        Map<String, Object> account = (Map<String, Object>) body.get("kakao_account");
-        if (account != null) {
-            email = (String) account.get("email"); // 이메일 동의항목을 안 켰으면 null
-            if (nickname == null) {
-                Map<String, Object> profile = (Map<String, Object>) account.get("profile");
-                if (profile != null) {
-                    nickname = (String) profile.get("nickname");
-                }
-            }
-        }
-        return new OAuthUser("kakao", id, nickname, email);
+        return mapper.map(body);
     }
 }
