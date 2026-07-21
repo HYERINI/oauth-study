@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>로그인 결과</title>
+    <style>
+        body { font-family: -apple-system, sans-serif; max-width: 480px; margin: 60px auto; padding: 0 20px; }
+        .error { color: #c0392b; background: #fdecea; padding: 16px; border-radius: 8px; line-height: 1.6; }
+        table { border-collapse: collapse; width: 100%; margin-top: 16px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background: #f7f7f7; width: 100px; }
+        a { display: inline-block; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <!-- state 불일치 등 실패 시 -->
+    <div th:if="${error}" class="error" th:text="${error}"></div>
+
+    <!-- 로그인 성공 시: (7)단계에서 가져온 사용자 정보 -->
+    <div th:if="${user}">
+        <h1>로그인 성공 🎉</h1>
+        <table>
+            <tr><th>제공자</th><td th:text="${user.provider()}"></td></tr>
+            <tr><th>ID</th><td th:text="${user.id()}"></td></tr>
+            <tr><th>이름</th><td th:text="${user.name()}"></td></tr>
+            <tr><th>이메일</th><td th:text="${user.email()}"></td></tr>
+            <tr><th>토큰(일부)</th><td th:text="${tokenPreview}"></td></tr>
+        </table>
+    </div>
+
+    <a href="/">← 처음으로</a>
+</body>
+</html>
