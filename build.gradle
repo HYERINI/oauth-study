@@ -1,0 +1,28 @@
+plugins {
+    id 'java'
+    // 스프링 부트 플러그인: 실행 가능한 jar 빌드, 의존성 버전 관리 등을 해준다.
+    id 'org.springframework.boot' version '3.4.2'
+    // 스프링이 정해둔 라이브러리 버전 조합을 그대로 가져다 쓰게 해주는 플러그인.
+    // 덕분에 아래 dependencies에서 버전 번호를 안 적어도 된다.
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.study'
+version = '0.0.1'
+
+java {
+    // 이 컴퓨터에 설치된 Java 21 사용
+    sourceCompatibility = '21'
+}
+
+repositories {
+    // 라이브러리를 내려받을 중앙 저장소
+    mavenCentral()
+}
+
+dependencies {
+    // 웹 서버(내장 톰캣) + 컨트롤러 + JSON 처리(Jackson) + RestClient 전부 포함
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    // 결과를 보여줄 HTML 화면(템플릿 엔진). 학습용 결과 페이지 렌더링에만 쓴다.
+    implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
+}
